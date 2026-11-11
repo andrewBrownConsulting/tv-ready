@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TV Ready</title>
+<style>
+  :root { --bg:#f5f5f7; --card:#fff; --text:#1c1c1e; --muted:#6e6e73; --line:#e3e3e8; --accent:#03a9f4; --ok:#2e7d32; --warn:#ed6c02; --bad:#c62828; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111; --card:#1c1c1e; --text:#f2f2f7; --muted:#9a9aa0; --line:#2c2c2e; --accent:#29b6f6; --ok:#66bb6a; --warn:#ffa726; --bad:#ef5350; } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  main { max-width:960px; margin:0 auto; padding:16px; display:grid; gap:16px; }
+  .card { background:var(--card); border-radius:12px; padding:16px 18px; box-shadow:0 1px 2px rgba(0,0,0,.06); }
+  h1 { font-size:22px; margin:0; } h2 { font-size:14px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 10px; }
+  .row { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .spacer { flex:1; }
+  .pill { padding:3px 10px; border-radius:99px; font-size:13px; font-weight:600; background:var(--line); }
+  .pill.converting { background:var(--accent); color:#fff; } .pill.waiting { background:var(--warn); color:#fff; }
+  .pill.paused { background:var(--muted); color:#fff; } .pill.idle { background:var(--ok); color:#fff; }
+  button { font:inherit; border:1px solid var(--line); background:var(--card); color:var(--text); padding:7px 14px; border-radius:8px; cursor:pointer; }
+  button.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:hover { filter:brightness(.95); }
+  .bar { height:10px; background:var(--line); border-radius:5px; overflow:hidden; margin:10px 0 6px; }
+  .bar > div { height:100%; background:var(--accent); width:0; transition:width .8s; }
+  .file { font-weight:600; word-break:break-word; } .muted { color:var(--muted); font-size:13px; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:12px; }
+  .stat b { display:block; font-size:24px; } .stat span { color:var(--muted); font-size:13px; }
+  ol, ul { margin:0; padding-left:20px; } li { margin:3px 0; word-break:break-word; }
+  table { width:100%; border-collapse:collapse; font-size:14px; } td { padding:6px 4px; border-top:1px solid var(--line); vertical-align:top; }
+  td.r { text-align:right; white-space:nowrap; } .bad { color:var(--bad); } .good { color:var(--ok); }
+  pre { margin:0; max-height:260px; overflow:auto; font:12px/1.5 ui-monospace, Menlo, monospace; white-space:pre-wrap; color:var(--muted); }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; } @media (max-width:720px) { .grid2 { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="card">
+    <div class="row">
+      <h1>TV Ready</h1><span id="pill" class="pill">…</span><span class="spacer"></span>
+      <button id="runnow" title="Ignore the off-peak window until the queue is empty">Run now</button>
+      <button id="pause">Pause</button>
+    </div>
+    <p class="muted" id="sched" style="margin:8px 0 0"></p>
+  </div>
+
+  <div class="card" id="currentCard">
+    <h2>Converting</h2>
+    <div id="current" class="muted">Nothing right now.</div>
+  </div>
+
+  <div class="card">
+    <h2>Library</h2>
+    <div class="stats">
+      <div class="stat"><b id="sReady">–</b><span>files TV-ready</span></div>
+      <div class="stat"><b id="sQueue">–</b><span>waiting to convert</span></div>
+      <div class="stat"><b id="sConv">–</b><span>converted so far</span></div>
+      <div class="stat"><b id="sSize">–</b><span>size change</span></div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="card"><h2>Up next</h2><ol id="queue"></ol><p class="muted" id="qmore"></p></div>
+    <div class="card"><h2>Recently finished</h2><table id="hist"></table></div>
+  </div>
+
+  <div class="card"><div class="row"><h2 style="margin:0">Log</h2><span class="spacer"></span><button id="retry">Retry failed</button></div><pre id="log" style="margin-top:10px"></pre></div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+const api = (p, m = "GET") => fetch("api/" + p, { method: m }).then((r) => r.json());   // relative: works behind HA ingress
+const gb = (b) => (b / 1e9).toFixed(b > 1e10 ? 0 : 1) + " GB";
+const dur = (s) => s == null ? "" : s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min` : s >= 60 ? `${Math.round(s / 60)} min` : `${Math.round(s)} s`;
+const ago = (t) => { const s = Date.now() / 1000 - t; return s < 3600 ? `${Math.max(1, Math.round(s / 60))} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : new Date(t * 1000).toLocaleDateString(); };
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const LABEL = { converting: "Converting", waiting: "Waiting for off-peak", paused: "Paused", idle: "All done", starting: "Starting" };
+
+async function refresh() {
+  let d;
+  try { d = await api("status"); } catch { $("pill").textContent = "Offline"; return; }
+  $("pill").textContent = LABEL[d.status] || d.status; $("pill").className = "pill " + d.status;
+  $("pause").textContent = d.paused ? "Resume" : "Pause"; $("pause").classList.toggle("on", d.paused);
+  $("runnow").classList.toggle("on", d.run_now);
+  $("sched").textContent = `Converts between ${d.window[0]} and ${d.window[1]}` +
+    (d.off_peak ? " — off-peak now." : " — outside the window now.") +
+    (d.run_now ? " Run now is on: ignoring the window until the queue is empty." : "") +
+    (d.jellyfin ? " Jellyfin: what you're watching goes first." : "");
+  const c = d.current;
+  $("current").innerHTML = c ? `
+    <div class="file">${esc(c.file)}</div>
+    <div class="bar"><div style="width:${c.pct.toFixed(1)}%"></div></div>
+    <div class="row muted"><span>${c.pct.toFixed(1)}%</span><span>${c.speed ? esc(c.speed) + " real time" : ""}</span>
+      <span>${c.eta ? "about " + dur(c.eta) + " left" : ""}</span><span class="spacer"></span><span>${esc(c.reason)}${c.urgent ? " · being watched" : ""}</span>
+      <button id="skip">Skip</button></div>` : `<span class="muted">${d.status === "waiting" ? "Waiting for the off-peak window." : d.status === "idle" ? "Everything is TV-ready." : "Nothing right now."}</span>`;
+  if (c) $("skip").onclick = () => api("skip", "POST").then(refresh);
+  const s = d.stats;
+  $("sReady").textContent = s.ready; $("sQueue").textContent = d.queue_total; $("sConv").textContent = s.converted;
+  $("sSize").textContent = s.bytes_before ? `${gb(s.bytes_before)} → ${gb(s.bytes_after)}` : "–";
+  $("queue").innerHTML = d.queue.map((f) => `<li>${esc(f)}</li>`).join("") || '<span class="muted">Nothing waiting.</span>';
+  $("qmore").textContent = d.queue_total > d.queue.length ? `…and ${d.queue_total - d.queue.length} more` : "";
+  $("hist").innerHTML = d.history.map((h) => `<tr><td>${esc(h.file)}<div class="muted">${esc(h.why || "")}${h.error ? " — " + esc(h.error) : ""}</div></td>
+    <td class="r ${h.result === "failed" ? "bad" : "good"}">${h.result === "failed" ? "failed" : dur(h.seconds)}</td><td class="r muted">${ago(h.at)}</td></tr>`).join("")
+    || '<tr><td class="muted">Nothing yet.</td></tr>';
+  $("log").textContent = d.log.join("\n");
+}
+$("pause").onclick = () => api($("pause").textContent === "Pause" ? "pause" : "resume", "POST").then(refresh);
+$("runnow").onclick = () => api("run_now", "POST").then(refresh);
+$("retry").onclick = () => api("retry_failed", "POST").then(refresh);
+refresh(); setInterval(refresh, 2000);
+</script>
+</body>
+</html>

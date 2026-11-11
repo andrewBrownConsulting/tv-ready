@@ -1,0 +1,43 @@
+name: TV Ready
+version: "0.1.0"
+slug: tv_ready
+description: Converts your video library overnight so every file plays cleanly on your TV - no stretching, no failed playback, seekable.
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: application
+boot: auto
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:television-play
+panel_title: TV Ready
+map:
+  - type: media
+    read_only: false
+options:
+  folders:
+    - /media
+  backup_folder: /media/TV Ready originals
+  off_peak_start: "01:00"
+  off_peak_end: "07:00"
+  convert_watching_anytime: true
+  pad_to_16_9: true
+  quality: 20
+  cpu_threads: 2
+  jellyfin_url: ""
+  jellyfin_api_key: ""
+  jellyfin_user: ""
+schema:
+  folders:
+    - str
+  backup_folder: str?
+  off_peak_start: match(^([01]\d|2[0-3]):[0-5]\d$)
+  off_peak_end: match(^([01]\d|2[0-3]):[0-5]\d$)
+  convert_watching_anytime: bool
+  pad_to_16_9: bool
+  quality: int(14,32)
+  cpu_threads: int(1,16)
+  jellyfin_url: str?
+  jellyfin_api_key: password?
+  jellyfin_user: str?
