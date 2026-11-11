@@ -12,7 +12,7 @@ Open **TV Ready** in the sidebar to see what it's doing.
 | `folders` | `/media` | Folders to convert (subfolders included). Your media folder is `/media`. |
 | `backup_folder` | `/media/TV Ready originals` | Where originals are copied before being replaced. Leave empty to not keep originals. Never scanned. |
 | `off_peak_start` / `off_peak_end` | `01:00` / `07:00` | Only convert inside this window (24 h clock, may cross midnight). Same value for both = any time. |
-| `convert_watching_anytime` | `true` | With Jellyfin set up: convert what you're watching / up next straight away, even outside the window. |
+| `convert_watching_anytime` | `true` | With Jellyfin set up: convert what you're watching (in progress or up next) and the episode straight after it right away, even outside the window. |
 | `pad_to_16_9` | `true` | Add black bars to make every picture 16:9, so TVs that fill the screen don't stretch it. |
 | `quality` | `20` | x264 CRF. Lower = better quality and bigger files (18-23 is sensible). |
 | `cpu_threads` | `2` | Encoder threads. Conversion always runs at the lowest CPU priority. |
@@ -46,3 +46,13 @@ With a URL and API key, TV Ready:
 1. converts files that are in progress or up next first - then the episodes after them, so autoplay lands on converted files;
 2. remembers watched status and resume points before converting, and puts them back after Jellyfin
    rescans (a `.avi` that becomes `.mkv` is a new item to Jellyfin).
+
+## Home Assistant events
+
+TV Ready fires events you can use in automations:
+
+- `tv_ready_started` - `{path, name, urgent}` when a file starts converting (`urgent` = being watched).
+- `tv_ready_converted` - `{path, original_path, name, renamed, urgent}` when a converted file is in place.
+
+For example, reload the video on your TV when the episode you're watching has just been converted, so the
+new version (padded, seekable) takes over from where you are.

@@ -86,7 +86,7 @@ async function refresh() {
     (d.jellyfin ? " Jellyfin: what you're watching goes first." : "");
   const c = d.current;
   $("current").innerHTML = c ? `
-    <div class="file">${esc(c.file)}</div>
+    <div class="file" title="${esc(c.file)}">${esc(c.name)}</div>
     <div class="bar"><div style="width:${c.pct.toFixed(1)}%"></div></div>
     <div class="row muted"><span>${c.pct.toFixed(1)}%</span><span>${c.speed ? esc(c.speed) + " real time" : ""}</span>
       <span>${c.eta ? "about " + dur(c.eta) + " left" : ""}</span><span class="spacer"></span><span>${esc(c.reason)}${c.urgent ? " · being watched" : ""}</span>
@@ -95,9 +95,9 @@ async function refresh() {
   const s = d.stats;
   $("sReady").textContent = s.ready; $("sQueue").textContent = d.queue_total; $("sConv").textContent = s.converted;
   $("sSize").textContent = s.bytes_before ? `${gb(s.bytes_before)} → ${gb(s.bytes_after)}` : "–";
-  $("queue").innerHTML = d.queue.map((f) => `<li>${esc(f)}</li>`).join("") || '<span class="muted">Nothing waiting.</span>';
+  $("queue").innerHTML = d.queue.map((q) => `<li title="${esc(q.file)}">${esc(q.name)}</li>`).join("") || '<span class="muted">Nothing waiting.</span>';
   $("qmore").textContent = d.queue_total > d.queue.length ? `…and ${d.queue_total - d.queue.length} more` : "";
-  $("hist").innerHTML = d.history.map((h) => `<tr><td>${esc(h.file)}<div class="muted">${esc(h.why || "")}${h.error ? " — " + esc(h.error) : ""}</div></td>
+  $("hist").innerHTML = d.history.map((h) => `<tr><td title="${esc(h.file)}">${esc(h.name)}<div class="muted">${esc(h.why || "")}${h.error ? " — " + esc(h.error) : ""}</div></td>
     <td class="r ${h.result === "failed" ? "bad" : "good"}">${h.result === "failed" ? "failed" : dur(h.seconds)}</td><td class="r muted">${ago(h.at)}</td></tr>`).join("")
     || '<tr><td class="muted">Nothing yet.</td></tr>';
   $("log").textContent = d.log.join("\n");

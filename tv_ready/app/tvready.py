@@ -8,7 +8,7 @@ next) can be converted straight away, and watch progress survives files being re
 Runs as a Home Assistant add-on: settings from /data/options.json, state in /data, web UI on the
 ingress port. Standard library only (+ ffmpeg/ffprobe).
 """
-import json, os, signal, subprocess, threading, time, urllib.request
+import json, os, re, signal, subprocess, threading, time, urllib.request
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -173,6 +173,19 @@ def jf_refresh_and_restore():
         log(f"Couldn't restore Jellyfin watch state: {e}")
 
 
+def ha_event(name, data):
+    """Fire a Home Assistant event (e.g. so an automation can reload a video the moment it's converted)."""
+    tok = os.environ.get("SUPERVISOR_TOKEN")
+    if not tok:
+        return
+    try:
+        req = urllib.request.Request(f"http://supervisor/core/api/events/{name}", data=json.dumps(data).encode(),
+                                     headers={"Authorization": f"Bearer {tok}", "Content-Type": "application/json"}, method="POST")
+        urllib.request.urlopen(req, timeout=10).read()
+    except Exception as e:
+        log(f"Couldn't notify Home Assistant ({name}): {e}")
+
+
 # ---------------------------------------------------------------- media
 
 def probe(f):
@@ -253,7 +266,10 @@ def order(todo, hot):
                 later = sorted(x for x in todo if os.path.dirname(x) == os.path.dirname(h) and x > h)
                 best = min(best or (99, 99), (later.index(f) if f in later else 99, n))
         return (1, best[0], best[1], f) if best else (2, 0, 0, f)
-    return sorted(todo, key=rank), {f for f in todo if f in hot}
+    ranked = sorted(todo, key=rank)
+    # "being watched" = the files themselves and the episode straight after each (so autoplay lands on a converted file)
+    urgent = {f for f in todo if rank(f)[0] == 0 or (rank(f)[0] == 1 and rank(f)[1] == 0)}
+    return ranked, urgent
 
 
 def convert(f, p, urgent):
@@ -295,13 +311,13 @@ def convert(f, p, urgent):
     if S.skip:
         S.skip = False
         if os.path.exists(tmp): os.remove(tmp)
-        log(f"Skipped {rel(f)}")
+        log(f"Skipped {pretty(f)}")
         return False
     if rc != 0:
         if os.path.exists(tmp): os.remove(tmp)
         S.failed[f] = sig(f)
         S.history.append({"file": f, "result": "failed", "at": time.time(), "why": p["why"], "error": err.strip()[-300:]})
-        log(f"FAILED {rel(f)}: {err.strip()[-200:]}")
+        log(f"FAILED {pretty(f)}: {err.strip()[-200:]}")
         S.save()
         return False
     if OPT.get("backup_folder"):
@@ -316,7 +332,8 @@ def convert(f, p, urgent):
     S.checked[out] = sig(out)
     S.history.append({"file": out, "result": "converted", "at": time.time(), "why": p["why"],
                       "seconds": round(time.time() - started), "before": before, "after": after})
-    log(f"Converted {rel(out)} ({p['why']}) in {round((time.time() - started) / 60)} min")
+    log(f"Converted {pretty(out)} ({p['why']}) in {round((time.time() - started) / 60)} min")
+    ha_event("tv_ready_converted", {"path": out, "original_path": f, "name": pretty(out), "renamed": out != f, "urgent": urgent})
     S.save()
     return out != f
 
@@ -326,6 +343,27 @@ def rel(f):
         if f.startswith(root.rstrip("/") + "/"):
             return f[len(root.rstrip("/")) + 1:]
     return f
+
+
+JUNK = re.compile(r"\b(480p|576p|720p|1080p|2160p|4k|uhd|hdr|bluray|blu-ray|brrip|bdrip|webrip|web-dl|webdl|web|hdtv|dvdrip|"
+                  r"x264|x265|h264|h\.264|h265|hevc|xvid|divx|aac|ac3|dts|remux|proper|repack|10bit)\b.*$", re.I)
+
+
+def pretty(path):
+    """Human-friendly name: 'Show · S1E7 · Title' for episodes, 'Title (Year)' for films."""
+    r = rel(path)
+    parts = r.split("/")
+    base = os.path.splitext(parts[-1])[0]
+    clean = lambda t: re.sub(r"\s+", " ", re.sub(r"[\[(][^\])]*[\])]", " ", t.replace("_", " ").replace(".", " "))).strip(" -·")
+    m = re.search(r"[Ss](\d{1,2})[ ._-]?[Ee](\d{1,3})", base)
+    if m:
+        show = parts[0] if len(parts) > 2 else clean(base[:m.start()])
+        title = clean(JUNK.sub("", base[m.end():].replace(".", " ")))
+        title = re.sub(r"\s+-\s+", ", ", title)
+        return " · ".join(x for x in (show, f"S{int(m.group(1))}E{int(m.group(2))}", title) if x)
+    y = re.search(r"[ .(\[]((?:19|20)\d\d)[ .)\]]", base + " ")
+    title = clean(JUNK.sub("", (base[:y.start()] if y else base).replace(".", " ")))
+    return f"{title} ({y.group(1)})" if y else title or parts[-1]
 
 
 # ---------------------------------------------------------------- worker
@@ -366,7 +404,8 @@ def worker():
             S.checked[f] = sig(f); S.save(); continue
         if not snapshot_done:
             jf_snapshot(); snapshot_done = True
-        log(f"Converting {rel(f)} - {p['why']}" + (" (being watched)" if urgent else ""))
+        log(f"Converting {pretty(f)} - {p['why']}" + (" (being watched)" if urgent else ""))
+        ha_event("tv_ready_started", {"path": f, "name": pretty(f), "urgent": bool(urgent)})
         try:
             if convert(f, p, urgent):
                 renamed_since_refresh = True
@@ -409,13 +448,13 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/status":
             with LOCK:
                 cur = dict(S.current) if S.current else None
-                if cur: cur["file"] = rel(cur["file"])
-                hist = [dict(h, file=rel(h["file"])) for h in S.history[-30:]][::-1]
+                if cur: cur["name"], cur["file"] = pretty(cur["file"]), rel(cur["file"])
+                hist = [dict(h, name=pretty(h["file"]), file=rel(h["file"])) for h in S.history[-30:]][::-1]
                 conv = [h for h in S.history if h["result"] == "converted"]
                 body = {
-                    "status": S.status, "paused": S.paused, "run_now": S.run_now,
+                    "status": "paused" if S.paused else S.status, "paused": S.paused, "run_now": S.run_now,
                     "off_peak": in_off_peak(), "window": [OPT["off_peak_start"], OPT["off_peak_end"]],
-                    "current": cur, "queue": [rel(f) for f in S.queue[:25]], "queue_total": S.queue_total,
+                    "current": cur, "queue": [{"name": pretty(f), "file": rel(f)} for f in S.queue[:25]], "queue_total": S.queue_total,
                     "history": hist, "log": LOG[-80:][::-1], "jellyfin": jf_enabled(),
                     "stats": {"converted": len(conv), "ready": len(S.checked),
                               "failed": len([h for h in S.history if h["result"] == "failed"]),
