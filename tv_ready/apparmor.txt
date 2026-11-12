@@ -1,0 +1,53 @@
+#include <tunables/global>
+
+profile tv_ready flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # Capabilities S6-overlay (the base image's init) needs
+  capability chown,
+  capability dac_override,
+  capability fowner,
+  capability fsetid,
+  capability kill,
+  capability setgid,
+  capability setuid,
+
+  # Files (the base S6 init needs broad access; the explicit rules below document what TV Ready uses)
+  file,
+  deny /proc/sys/** w,
+  deny /sys/** w,
+
+  # Talks to the Home Assistant Supervisor, Jellyfin and serves the panel
+  network inet tcp,
+  network inet udp,
+  network inet6 tcp,
+  network inet6 udp,
+  network unix,
+
+  # Pause / resume / skip the encoder
+  signal (send) set=(stop, cont, term, kill, int, hup),
+  signal (receive),
+
+  # S6-overlay
+  /init ix,
+  /bin/** ix,
+  /usr/bin/** ix,
+  /usr/sbin/** ix,
+  /package/** ix,
+  /command/** ix,
+  /run/{s6,s6-rc*,service}/** ix,
+  /etc/services.d/** rwix,
+  /etc/cont-init.d/** rwix,
+  /etc/cont-finish.d/** rwix,
+  /run/{,**} rwk,
+  /dev/tty rw,
+  /tmp/** rwk,
+
+  # The add-on itself
+  /app/** r,
+  /usr/lib/python3*/** mr,
+
+  # State, and the media library it converts (incl. the backup folder)
+  /data/** rwk,
+  /media/** rwk,
+}
