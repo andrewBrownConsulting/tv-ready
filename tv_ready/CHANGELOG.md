@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- Installs and updates now download a ready-made image (seconds) instead of building on your machine.
+
 ## 0.2.0
 
 - Prebuilt images for amd64 and aarch64 (built by GitHub Actions).
