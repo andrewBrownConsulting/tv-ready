@@ -186,6 +186,28 @@ def ha_event(name, data):
         log(f"Couldn't notify Home Assistant ({name}): {e}")
 
 
+# ---------------------------------------------------------------- hardware encoding (Intel Quick Sync via VA-API)
+
+HW = None   # {"driver": "iHD"} when hardware H.264 encoding works
+
+
+def detect_hw():
+    """Encode a 1-second test clip with Quick Sync; use it only if that works."""
+    global HW
+    if not OPT.get("hardware_acceleration", True) or not os.path.exists("/dev/dri/renderD128"):
+        return
+    for drv in ("iHD", "i965"):
+        r = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-vaapi_device", "/dev/dri/renderD128", "-f", "lavfi",
+                            "-i", "testsrc=size=640x360:rate=25:duration=1", "-vf", "format=nv12,hwupload",
+                            "-c:v", "h264_vaapi", "-f", "null", "-"], capture_output=True, text=True,
+                           env=dict(os.environ, LIBVA_DRIVER_NAME=drv))
+        if r.returncode == 0:
+            HW = {"driver": drv}
+            log(f"Intel Quick Sync available ({drv} driver) - using hardware H.264 encoding")
+            return
+    log("No hardware encoder found - using software encoding")
+
+
 # ---------------------------------------------------------------- media
 
 def probe(f):
@@ -278,25 +300,33 @@ def order(todo, hot):
     return ranked, urgent
 
 
-def convert(f, p, urgent):
+def convert(f, p, urgent, hw=None):
     """Returns True if the library file was replaced."""
+    hw = HW if hw is None else (hw or None)
     is_mp4 = os.path.splitext(f)[1].lower() == ".mp4"
     out = os.path.splitext(f)[0] + (".mp4" if is_mp4 else ".mkv")
     tmp = os.path.join(os.path.dirname(f), ".tvready_" + os.path.basename(out))
     threads = str(max(OPT["cpu_threads"], 4) if urgent else OPT["cpu_threads"])
-    vargs = ["-c:v", "copy"] if p["v_ok"] else [
-        "-vf", VF_PAD if OPT["pad_to_16_9"] else VF_PLAIN, "-c:v", "libx264", "-preset", "veryfast",
-        "-crf", str(OPT["quality"]), "-threads", threads]
+    vf = VF_PAD if OPT["pad_to_16_9"] else VF_PLAIN
+    if p["v_ok"]:
+        vargs, pre = ["-c:v", "copy"], []
+    elif hw:   # decode + bars in software, compress on the Intel GPU
+        vargs = ["-vf", vf + ",format=nv12,hwupload", "-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", str(OPT["quality"] + 2)]
+        pre = ["-vaapi_device", "/dev/dri/renderD128"]
+    else:
+        vargs, pre = ["-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", str(OPT["quality"]), "-threads", threads], []
     aargs = ["-c:a", "copy"] if p["a_ok"] else ["-c:a", "aac", "-b:a", "160k"]
     sargs = ["-sn"] if is_mp4 else ["-map", "0:s?", "-c:s", "copy"]
-    cmd = ["nice", "-n", "5" if urgent else "19", "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
+    cmd = ["nice", "-n", "5" if urgent else "19", "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", *pre,
            "-i", f, "-map", "0:v:0", "-map", "0:a?", *vargs, *aargs, *sargs, "-progress", "pipe:1", "-nostats", tmp]
+    env = dict(os.environ, LIBVA_DRIVER_NAME=hw["driver"]) if hw else None
     before = os.path.getsize(f)
     started = time.time()
     with LOCK:
         S.current = {"file": f, "pct": 0.0, "speed": "", "eta": None, "started": started,
-                     "reason": p["why"], "urgent": urgent, "size_before": before}
-    S.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                     "reason": p["why"], "urgent": urgent, "size_before": before,
+                     "encoder": "Quick Sync" if (hw and not p["v_ok"]) else ("copy" if p["v_ok"] else "software")}
+    S.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     for line in S.proc.stdout:
         k, _, val = line.strip().partition("=")
         with LOCK:
@@ -321,6 +351,9 @@ def convert(f, p, urgent):
         return False
     if rc != 0:
         if os.path.exists(tmp): os.remove(tmp)
+        if hw and not p["v_ok"]:
+            log(f"Quick Sync couldn't convert {pretty(f)} ({err.strip()[-120:]}) - retrying in software")
+            return convert(f, p, urgent, hw=False)
         S.failed[f] = sig(f)
         S.history.append({"file": f, "result": "failed", "at": time.time(), "why": p["why"], "error": err.strip()[-300:]})
         log(f"FAILED {pretty(f)}: {err.strip()[-200:]}")
@@ -459,7 +492,7 @@ class Handler(BaseHTTPRequestHandler):
                 conv = [h for h in S.history if h["result"] == "converted"]
                 body = {
                     "status": "paused" if S.paused else S.status, "paused": S.paused, "run_now": S.run_now,
-                    "off_peak": in_off_peak(), "window": [OPT["off_peak_start"], OPT["off_peak_end"]],
+                    "off_peak": in_off_peak(), "window": [OPT["off_peak_start"], OPT["off_peak_end"]], "hw": bool(HW),
                     "current": cur, "queue": [{"name": pretty(f), "file": rel(f)} for f in S.queue[:25]], "queue_total": S.queue_total,
                     "history": hist, "log": LOG[-80:][::-1], "jellyfin": jf_enabled(),
                     "stats": {"converted": len(conv), "ready": len(S.checked),
@@ -504,6 +537,7 @@ def main():
                 if x.startswith(".tvready_"):
                     try: os.remove(os.path.join(d, x))
                     except OSError: pass
+    detect_hw()
     threading.Thread(target=worker, daemon=True).start()
     ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
 

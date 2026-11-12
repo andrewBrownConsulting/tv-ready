@@ -15,7 +15,8 @@ Open **TV Ready** in the sidebar to see what it's doing.
 | `convert_watching_anytime` | `true` | With Jellyfin set up: convert what you're watching (in progress or up next) and the episode straight after it right away, even outside the window. |
 | `pad_to_16_9` | `true` | Add black bars to make every picture 16:9, so TVs that fill the screen don't stretch it. |
 | `quality` | `20` | x264 CRF. Lower = better quality and bigger files (18-23 is sensible). |
-| `cpu_threads` | `2` | Encoder threads. Conversion always runs at the lowest CPU priority. |
+| `cpu_threads` | `2` | Encoder threads (software encoding). Conversion always runs at low CPU priority. |
+| `hardware_acceleration` | `true` | Use Intel Quick Sync for H.264 encoding when the machine has it (detected automatically; falls back to software). |
 | `jellyfin_url` | | e.g. `http://192.168.1.10:8096`. Optional. |
 | `jellyfin_api_key` | | Jellyfin → Dashboard → API keys. |
 | `jellyfin_user` | | User whose watching decides the order (name or id). Default: first user. |

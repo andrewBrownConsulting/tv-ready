@@ -1,5 +1,5 @@
 name: TV Ready
-version: "0.2.3"
+version: "0.3.0"
 slug: tv_ready
 image: ghcr.io/andrewbrownconsulting/{arch}-addon-tv_ready
 description: Converts your video library overnight so every file plays cleanly on your TV - no stretching, no failed playback, seekable.
@@ -14,6 +14,7 @@ ingress_port: 8099
 panel_icon: mdi:television-play
 panel_title: TV Ready
 homeassistant_api: true
+video: true
 map:
   - type: media
     read_only: false
@@ -27,6 +28,7 @@ options:
   pad_to_16_9: true
   quality: 20
   cpu_threads: 2
+  hardware_acceleration: true
   jellyfin_url: ""
   jellyfin_api_key: ""
   jellyfin_user: ""
@@ -40,6 +42,7 @@ schema:
   pad_to_16_9: bool
   quality: int(14,32)
   cpu_threads: int(1,16)
+  hardware_acceleration: bool?
   jellyfin_url: str?
   jellyfin_api_key: password?
   jellyfin_user: str?

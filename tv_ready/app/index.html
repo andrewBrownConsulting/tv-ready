@@ -83,13 +83,13 @@ async function refresh() {
   $("sched").textContent = `Converts between ${d.window[0]} and ${d.window[1]}` +
     (d.off_peak ? " — off-peak now." : " — outside the window now.") +
     (d.run_now ? " Run now is on: ignoring the window until the queue is empty." : "") +
-    (d.jellyfin ? " Jellyfin: what you're watching goes first." : "");
+    (d.jellyfin ? " Jellyfin: what you're watching goes first." : "") + (d.hw ? " Using Intel Quick Sync." : "");
   const c = d.current;
   $("current").innerHTML = c ? `
     <div class="file" title="${esc(c.file)}">${esc(c.name)}</div>
     <div class="bar"><div style="width:${c.pct.toFixed(1)}%"></div></div>
     <div class="row muted"><span>${c.pct.toFixed(1)}%</span><span>${c.speed ? esc(c.speed) + " real time" : ""}</span>
-      <span>${c.eta ? "about " + dur(c.eta) + " left" : ""}</span><span class="spacer"></span><span>${esc(c.reason)}${c.urgent ? " · being watched" : ""}</span>
+      <span>${c.eta ? "about " + dur(c.eta) + " left" : ""}</span><span class="spacer"></span><span>${esc(c.reason)}${c.urgent ? " · being watched" : ""}${c.encoder ? " · " + esc(c.encoder) : ""}</span>
       <button id="skip">Skip</button></div>` : `<span class="muted">${d.status === "waiting" ? "Waiting for the off-peak window." : d.status === "idle" ? "Everything is TV-ready." : "Nothing right now."}</span>`;
   if (c) $("skip").onclick = () => api("skip", "POST").then(refresh);
   const s = d.stats;

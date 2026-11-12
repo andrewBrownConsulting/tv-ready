@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.0
+
+- Uses Intel Quick Sync (hardware H.264 encoding) when available - much faster and lighter on the CPU. Detected automatically, falls back to software per file if needed; turn off with `hardware_acceleration: false`.
+
 ## 0.2.3
 
 - "Up next" priority covers the next 3 episodes of each show you're watching (not the whole season), so newly added files aren't stuck behind it.
