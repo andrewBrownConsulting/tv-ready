@@ -265,7 +265,7 @@ def order(todo, hot):
             if os.path.dirname(h) == os.path.dirname(f) and f > h:
                 later = sorted(x for x in todo if os.path.dirname(x) == os.path.dirname(h) and x > h)
                 best = min(best or (99, 99), (later.index(f) if f in later else 99, n))
-        if best:
+        if best and best[0] < 3:  # only the next few episodes; the rest of the season waits its turn
             return (1, best[0], best[1], f)
         try:  # 3rd: newly added files (downloaded in the last 2 days), newest first - you probably want them soon
             age = time.time() - os.path.getmtime(f)

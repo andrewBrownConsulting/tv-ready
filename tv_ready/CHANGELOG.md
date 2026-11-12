@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.3
+
+- "Up next" priority covers the next 3 episodes of each show you're watching (not the whole season), so newly added files aren't stuck behind it.
+
 ## 0.2.2
 
 - Newly added files (last 2 days) are converted right after what you're watching, instead of waiting behind the whole library.
