@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2
+
+- Newly added files (last 2 days) are converted right after what you're watching, instead of waiting behind the whole library.
+
 ## 0.2.1
 
 - Installs and updates now download a ready-made image (seconds) instead of building on your machine.

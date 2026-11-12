@@ -43,7 +43,7 @@ If only the audio or container is wrong, the video is copied as-is (fast, no qua
 
 With a URL and API key, TV Ready:
 
-1. converts files that are in progress or up next first - then the episodes after them, so autoplay lands on converted files;
+1. converts files that are in progress or up next first - then the episodes after them, so autoplay lands on converted files - then anything added in the last two days;
 2. remembers watched status and resume points before converting, and puts them back after Jellyfin
    rescans (a `.avi` that becomes `.mkv` is a new item to Jellyfin).
 

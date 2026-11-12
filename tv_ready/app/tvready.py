@@ -265,7 +265,13 @@ def order(todo, hot):
             if os.path.dirname(h) == os.path.dirname(f) and f > h:
                 later = sorted(x for x in todo if os.path.dirname(x) == os.path.dirname(h) and x > h)
                 best = min(best or (99, 99), (later.index(f) if f in later else 99, n))
-        return (1, best[0], best[1], f) if best else (2, 0, 0, f)
+        if best:
+            return (1, best[0], best[1], f)
+        try:  # 3rd: newly added files (downloaded in the last 2 days), newest first - you probably want them soon
+            age = time.time() - os.path.getmtime(f)
+        except OSError:
+            age = 1e9
+        return (2, int(age), 0, f) if age < 2 * 86400 else (3, 0, 0, f)
     ranked = sorted(todo, key=rank)
     # "being watched" = the files themselves and the episode straight after each (so autoplay lands on a converted file)
     urgent = {f for f in todo if rank(f)[0] == 0 or (rank(f)[0] == 1 and rank(f)[1] == 0)}
