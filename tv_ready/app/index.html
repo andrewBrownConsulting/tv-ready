@@ -26,6 +26,8 @@
   .stats { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px, 1fr)); gap:12px; }
   .stat b { display:block; font-size:24px; } .stat span { color:var(--muted); font-size:13px; }
   ol, ul { margin:0; padding-left:20px; } li { margin:3px 0; word-break:break-word; }
+  #queue li { cursor:pointer; border-radius:6px; padding:2px 6px; } #queue li:hover { background:var(--line); }
+  .pin { font-size:11px; font-weight:700; color:#fff; background:var(--accent); border-radius:99px; padding:1px 7px; margin-left:6px; }
   table { width:100%; border-collapse:collapse; font-size:14px; } td { padding:6px 4px; border-top:1px solid var(--line); vertical-align:top; }
   td.r { text-align:right; white-space:nowrap; } .bad { color:var(--bad); } .good { color:var(--ok); }
   pre { margin:0; max-height:260px; overflow:auto; font:12px/1.5 ui-monospace, Menlo, monospace; white-space:pre-wrap; color:var(--muted); }
@@ -59,7 +61,10 @@
   </div>
 
   <div class="grid2">
-    <div class="card"><h2>Up next</h2><ol id="queue"></ol><p class="muted" id="qmore"></p></div>
+    <div class="card"><div class="row"><h2 style="margin:0">Up next</h2><span class="spacer"></span>
+      <input id="qfilter" type="search" placeholder="Find a file…" style="font:inherit;padding:5px 10px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--text);max-width:180px"></div>
+      <p class="muted" style="margin:6px 0 8px">Click a file to convert it next (even outside the window). Click again to un-pin.</p>
+      <ol id="queue"></ol><p class="muted" id="qmore"></p></div>
     <div class="card"><h2>Recently finished</h2><table id="hist"></table></div>
   </div>
 
@@ -95,8 +100,11 @@ async function refresh() {
   const s = d.stats;
   $("sReady").textContent = s.ready; $("sQueue").textContent = d.queue_total; $("sConv").textContent = s.converted;
   $("sSize").textContent = s.bytes_before ? `${gb(s.bytes_before)} → ${gb(s.bytes_after)}` : "–";
-  $("queue").innerHTML = d.queue.map((q) => `<li title="${esc(q.file)}">${esc(q.name)}</li>`).join("") || '<span class="muted">Nothing waiting.</span>';
-  $("qmore").textContent = d.queue_total > d.queue.length ? `…and ${d.queue_total - d.queue.length} more` : "";
+  const f = $("qfilter").value.trim().toLowerCase();
+  const list = f ? d.queue.filter((q) => (q.name + " " + q.file).toLowerCase().includes(f)) : d.queue.slice(0, 25);
+  $("queue").innerHTML = list.map((q) => `<li data-file="${esc(q.file)}" title="${esc(q.file)}">${esc(q.name)}${q.pinned ? '<span class="pin">next</span>' : ""}</li>`).join("")
+    || `<span class="muted">${f ? "No queued file matches." : "Nothing waiting."}</span>`;
+  $("qmore").textContent = !f && d.queue_total > list.length ? `…and ${d.queue_total - list.length} more — use Find to see them` : "";
   $("hist").innerHTML = d.history.map((h) => `<tr><td title="${esc(h.file)}">${esc(h.name)}<div class="muted">${esc(h.why || "")}${h.error ? " — " + esc(h.error) : ""}</div></td>
     <td class="r ${h.result === "failed" ? "bad" : "good"}">${h.result === "failed" ? "failed" : dur(h.seconds)}</td><td class="r muted">${ago(h.at)}</td></tr>`).join("")
     || '<tr><td class="muted">Nothing yet.</td></tr>';
@@ -105,6 +113,8 @@ async function refresh() {
 $("pause").onclick = () => api($("pause").textContent === "Pause" ? "pause" : "resume", "POST").then(refresh);
 $("runnow").onclick = () => api("run_now", "POST").then(refresh);
 $("retry").onclick = () => api("retry_failed", "POST").then(refresh);
+$("queue").onclick = (e) => { const li = e.target.closest("li[data-file]"); if (li) api("pin?file=" + encodeURIComponent(li.dataset.file), "POST").then(refresh); };
+$("qfilter").oninput = refresh;
 refresh(); setInterval(refresh, 2000);
 </script>
 </body>

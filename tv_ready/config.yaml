@@ -1,5 +1,5 @@
 name: TV Ready
-version: "0.3.0"
+version: "0.3.1"
 slug: tv_ready
 image: ghcr.io/andrewbrownconsulting/{arch}-addon-tv_ready
 description: Converts your video library overnight so every file plays cleanly on your TV - no stretching, no failed playback, seekable.

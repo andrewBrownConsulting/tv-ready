@@ -8,7 +8,7 @@ next) can be converted straight away, and watch progress survives files being re
 Runs as a Home Assistant add-on: settings from /data/options.json, state in /data, web UI on the
 ingress port. Standard library only (+ ffmpeg/ffprobe).
 """
-import json, os, re, signal, subprocess, threading, time, urllib.request
+import json, os, re, signal, subprocess, threading, time, urllib.parse, urllib.request
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -53,6 +53,7 @@ class State:
         self.checked = d.get("checked", {})   # path -> "size:mtime" of files known to be TV-ready
         self.history = d.get("history", [])   # finished jobs, newest last
         self.failed = d.get("failed", {})     # path -> "size:mtime" that failed (retried if the file changes)
+        self._pinned_saved = d.get("pinned", [])
         self.status = "starting"
         self.current = None                   # {file, pct, speed, eta, started, reason}
         self.queue = []
@@ -60,13 +61,14 @@ class State:
         self.paused = False
         self.run_now = False                  # ignore the off-peak window until the queue is empty
         self.skip = False
+        self.pinned = list(self._pinned_saved)  # files the user clicked "convert next" on, in click order
         self.proc = None
         self.wake = threading.Event()
 
     def save(self):
         with LOCK:
             tmp = STATE + ".tmp"
-            json.dump({"checked": self.checked, "history": self.history[-200:], "failed": self.failed}, open(tmp, "w"))
+            json.dump({"checked": self.checked, "history": self.history[-200:], "failed": self.failed, "pinned": self.pinned}, open(tmp, "w"))
             os.replace(tmp, STATE)
 
 
@@ -280,6 +282,8 @@ def pending(files):
 
 def order(todo, hot):
     def rank(f):
+        if f in S.pinned:
+            return (-1, S.pinned.index(f), 0, f)
         if f in hot:
             return (0, hot.index(f), f)
         best = None  # the episodes right after a hot one in the same folder, closest first
@@ -296,7 +300,7 @@ def order(todo, hot):
         return (2, int(age), 0, f) if age < 2 * 86400 else (3, 0, 0, f)
     ranked = sorted(todo, key=rank)
     # "being watched" = the files themselves and the episode straight after each (so autoplay lands on a converted file)
-    urgent = {f for f in todo if rank(f)[0] == 0 or (rank(f)[0] == 1 and rank(f)[1] == 0)}
+    urgent = {f for f in todo if rank(f)[0] <= 0 or (rank(f)[0] == 1 and rank(f)[1] == 0)}
     return ranked, urgent
 
 
@@ -418,7 +422,7 @@ def worker():
         hot = jf_hot_paths() if todo else []
         todo, hot_todo = order(todo, hot)
         with LOCK:
-            S.queue, S.queue_total = todo[:50], len(todo)
+            S.queue, S.queue_total = todo[:1000], len(todo)
         if not todo:
             if renamed_since_refresh:
                 jf_refresh_and_restore(); renamed_since_refresh = False
@@ -427,7 +431,7 @@ def worker():
             S.wake.wait(600); S.wake.clear()
             continue
         f = todo[0]
-        urgent = f in hot_todo and OPT.get("convert_watching_anytime")
+        urgent = (f in hot_todo and OPT.get("convert_watching_anytime")) or f in S.pinned
         if S.paused:
             S.status = "paused"; S.wake.wait(30); S.wake.clear(); continue
         if not (in_off_peak() or S.run_now or urgent):
@@ -446,6 +450,8 @@ def worker():
         log(f"Converting {pretty(f)} - {p['why']}" + (" (being watched)" if urgent else ""))
         ha_event("tv_ready_started", {"path": f, "name": pretty(f), "urgent": bool(urgent)})
         try:
+            if f in S.pinned:
+                S.pinned.remove(f)
             if convert(f, p, urgent):
                 renamed_since_refresh = True
                 if jf_enabled():
@@ -493,7 +499,7 @@ class Handler(BaseHTTPRequestHandler):
                 body = {
                     "status": "paused" if S.paused else S.status, "paused": S.paused, "run_now": S.run_now,
                     "off_peak": in_off_peak(), "window": [OPT["off_peak_start"], OPT["off_peak_end"]], "hw": bool(HW),
-                    "current": cur, "queue": [{"name": pretty(f), "file": rel(f)} for f in S.queue[:25]], "queue_total": S.queue_total,
+                    "current": cur, "queue": [{"name": pretty(f), "file": rel(f), "pinned": f in S.pinned} for f in S.queue], "queue_total": S.queue_total,
                     "history": hist, "log": LOG[-80:][::-1], "jellyfin": jf_enabled(),
                     "stats": {"converted": len(conv), "ready": len(S.checked),
                               "failed": len([h for h in S.history if h["result"] == "failed"]),
@@ -521,6 +527,15 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/skip":
             S.skip = True
             if S.proc and S.paused: S.proc.send_signal(signal.SIGCONT)
+        elif path == "/api/pin":
+            relf = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get("file", [""])[0]
+            full = next((f for f in S.queue if rel(f) == relf), None)
+            if full:
+                if full in S.pinned:
+                    S.pinned.remove(full); log(f"Un-pinned {pretty(full)}")
+                else:
+                    S.pinned.append(full); log(f"Pinned {pretty(full)} - converts next")
+                S.save()
         elif path == "/api/retry_failed":
             S.failed.clear(); S.save(); log("Retrying failed files")
         else:

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1
+
+- Click a file in Up next to convert it next (even outside the off-peak window); click again to un-pin.
+- Find box to search the whole queue.
+
 ## 0.3.0
 
 - Uses Intel Quick Sync (hardware H.264 encoding) when available - much faster and lighter on the CPU. Detected automatically, falls back to software per file if needed; turn off with `hardware_acceleration: false`.
