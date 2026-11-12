@@ -61,6 +61,7 @@ class State:
         self.paused = False
         self.run_now = False                  # ignore the off-peak window until the queue is empty
         self.skip = False
+        self.skipped = set()                  # skipped this session: left alone until a restart or "Retry failed"
         self.pinned = list(self._pinned_saved)  # files the user clicked "convert next" on, in click order
         self.proc = None
         self.wake = threading.Event()
@@ -272,7 +273,7 @@ def pending(files):
     for f in files:
         try:
             s = sig(f)
-            if S.checked.get(f) == s or S.failed.get(f) == s or time.time() - os.path.getmtime(f) < SETTLE_SECONDS:
+            if S.checked.get(f) == s or S.failed.get(f) == s or f in S.skipped or time.time() - os.path.getmtime(f) < SETTLE_SECONDS:
                 continue
         except FileNotFoundError:
             continue
@@ -351,7 +352,9 @@ def convert(f, p, urgent, hw=None):
     if S.skip:
         S.skip = False
         if os.path.exists(tmp): os.remove(tmp)
-        log(f"Skipped {pretty(f)}")
+        S.skipped.add(f)
+        if f in S.pinned: S.pinned.remove(f); S.save()
+        log(f"Skipped {pretty(f)} - left alone until TV Ready restarts or you press Retry failed")
         return False
     if rc != 0:
         if os.path.exists(tmp): os.remove(tmp)
@@ -447,6 +450,8 @@ def worker():
             S.checked[f] = sig(f); S.save(); continue
         if not snapshot_done:
             jf_snapshot(); snapshot_done = True
+        with LOCK:
+            S.queue = [x for x in S.queue if x != f]; S.queue_total = max(0, S.queue_total - 1)
         log(f"Converting {pretty(f)} - {p['why']}" + (" (being watched)" if urgent else ""))
         ha_event("tv_ready_started", {"path": f, "name": pretty(f), "urgent": bool(urgent)})
         try:
@@ -537,7 +542,7 @@ class Handler(BaseHTTPRequestHandler):
                     S.pinned.append(full); log(f"Pinned {pretty(full)} - converts next")
                 S.save()
         elif path == "/api/retry_failed":
-            S.failed.clear(); S.save(); log("Retrying failed files")
+            S.failed.clear(); S.skipped.clear(); S.save(); log("Retrying failed and skipped files")
         else:
             return self.send_error(404)
         S.wake.set()

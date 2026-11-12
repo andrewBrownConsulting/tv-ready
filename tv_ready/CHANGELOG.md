@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.2
+
+- Skip now really skips: the file is left alone until TV Ready restarts or you press Retry failed / skipped.
+- The file being converted no longer also shows at the top of Up next.
+
 ## 0.3.1
 
 - Click a file in Up next to convert it next (even outside the off-peak window); click again to un-pin.
