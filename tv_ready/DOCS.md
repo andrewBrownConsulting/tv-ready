@@ -57,3 +57,10 @@ TV Ready fires events you can use in automations:
 
 For example, reload the video on your TV when the episode you're watching has just been converted, so the
 new version (padded, seekable) takes over from where you are.
+
+## Shrink collection
+
+Press **Shrink collection** in the panel to also re-compress files that are far bigger than they need to be
+(roughly above 3 Mbps for SD, 5 Mbps for 720p, 8 Mbps for 1080p, 22 Mbps for 4K). This runs in the off-peak
+window after all normal conversions, uses Quick Sync when available, and only replaces a file if the new one is
+at least 15% smaller. Set a `backup_folder` if you want to keep the originals.

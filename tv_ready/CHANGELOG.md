@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+
+- **Shrink collection** button: once everything is TV-ready, files that are much bigger than they need to be (by bitrate for their resolution) are re-compressed off-peak. The original is kept if the saving is under 15%, and files you're watching are never touched.
+
 ## 0.3.2
 
 - Skip now really skips: the file is left alone until TV Ready restarts or you press Retry failed / skipped.

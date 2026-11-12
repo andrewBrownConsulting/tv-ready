@@ -39,6 +39,7 @@
   <div class="card">
     <div class="row">
       <h1>TV Ready</h1><span id="pill" class="pill">…</span><span class="spacer"></span>
+      <button id="shrink" title="Re-compress files that are much bigger than they need to be (off-peak, after normal conversions)">Shrink collection</button>
       <button id="runnow" title="Ignore the off-peak window until the queue is empty">Run now</button>
       <button id="pause">Pause</button>
     </div>
@@ -85,10 +86,12 @@ async function refresh() {
   $("pill").textContent = LABEL[d.status] || d.status; $("pill").className = "pill " + d.status;
   $("pause").textContent = d.paused ? "Resume" : "Pause"; $("pause").classList.toggle("on", d.paused);
   $("runnow").classList.toggle("on", d.run_now);
+  $("shrink").classList.toggle("on", d.shrink); $("shrink").textContent = d.shrink ? "Shrinking collection" : "Shrink collection";
   $("sched").textContent = `Converts between ${d.window[0]} and ${d.window[1]}` +
     (d.off_peak ? " — off-peak now." : " — outside the window now.") +
     (d.run_now ? " Run now is on: ignoring the window until the queue is empty." : "") +
-    (d.jellyfin ? " Jellyfin: what you're watching goes first." : "") + (d.hw ? " Using Intel Quick Sync." : "");
+    (d.jellyfin ? " Jellyfin: what you're watching goes first." : "") + (d.hw ? " Using Intel Quick Sync." : "") +
+    (d.shrink ? " Shrink collection is on: oversized files are re-compressed once everything else is done." : "");
   const c = d.current;
   $("current").innerHTML = c ? `
     <div class="file" title="${esc(c.file)}">${esc(c.name)}</div>
@@ -111,6 +114,7 @@ async function refresh() {
   $("log").textContent = d.log.join("\n");
 }
 $("pause").onclick = () => api($("pause").textContent === "Pause" ? "pause" : "resume", "POST").then(refresh);
+$("shrink").onclick = () => api("shrink", "POST").then(refresh);
 $("runnow").onclick = () => api("run_now", "POST").then(refresh);
 $("retry").onclick = () => api("retry_failed", "POST").then(refresh);
 $("queue").onclick = (e) => { const li = e.target.closest("li[data-file]"); if (li) api("pin?file=" + encodeURIComponent(li.dataset.file), "POST").then(refresh); };

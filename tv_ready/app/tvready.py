@@ -54,6 +54,8 @@ class State:
         self.history = d.get("history", [])   # finished jobs, newest last
         self.failed = d.get("failed", {})     # path -> "size:mtime" that failed (retried if the file changes)
         self._pinned_saved = d.get("pinned", [])
+        self.shrink = d.get("shrink", False)  # "Shrink collection": also re-compress files that are much bigger than needed
+        self.shrunk = d.get("shrunk", {})     # path -> "size:mtime" already looked at (and shrunk if worth it)
         self.status = "starting"
         self.current = None                   # {file, pct, speed, eta, started, reason}
         self.queue = []
@@ -69,7 +71,8 @@ class State:
     def save(self):
         with LOCK:
             tmp = STATE + ".tmp"
-            json.dump({"checked": self.checked, "history": self.history[-200:], "failed": self.failed, "pinned": self.pinned}, open(tmp, "w"))
+            json.dump({"checked": self.checked, "history": self.history[-200:], "failed": self.failed, "pinned": self.pinned,
+                       "shrink": self.shrink, "shrunk": self.shrunk}, open(tmp, "w"))
             os.replace(tmp, STATE)
 
 
@@ -215,14 +218,23 @@ def detect_hw():
 
 def probe(f):
     out = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
-                          "stream=codec_type,codec_name,width,height,sample_aspect_ratio:format=duration", "-of", "json", f],
+                          "stream=codec_type,codec_name,width,height,sample_aspect_ratio:format=duration,bit_rate,size", "-of", "json", f],
                          capture_output=True, text=True).stdout
     d = json.loads(out or "{}")
     st = d.get("streams", [])
     v = next((s for s in st if s["codec_type"] == "video" and s.get("width")), None)
     a = next((s for s in st if s["codec_type"] == "audio"), None)
-    dur = float(d.get("format", {}).get("duration") or 0)
+    fmt = d.get("format", {})
+    dur = float(fmt.get("duration") or 0)
+    if v is not None:
+        br = float(fmt.get("bit_rate") or 0) or (float(fmt.get("size") or 0) * 8 / dur if dur else 0)
+        v["_kbps"] = br / 1000
     return v, a, dur
+
+
+def shrink_target_kbps(height):
+    """Roughly what a file of this resolution needs to look good on a TV; files well above it get re-compressed."""
+    return 2000 if height <= 576 else 3500 if height <= 720 else 6000 if height <= 1080 else 16000
 
 
 def plan(f):
@@ -240,14 +252,17 @@ def plan(f):
     v_ok = v["codec_name"] == "h264" and shape_ok
     a_ok = a is None or a["codec_name"] in ("aac", "ac3", "eac3")
     ext_ok = os.path.splitext(f)[1].lower() in (".mkv", ".mp4")
-    if v_ok and a_ok and ext_ok:
+    big = S.shrink and v.get("_kbps", 0) > 1.4 * shrink_target_kbps(v["height"]) and dur > 60
+    if v_ok and a_ok and ext_ok and not big:
         return None
     why = []
     if v["codec_name"] != "h264": why.append(f"{v['codec_name']} video")
     if not shape_ok: why.append(f"{dar:.2f}:1 picture")
     if not a_ok: why.append(f"{a['codec_name']} audio")
     if not ext_ok: why.append(os.path.splitext(f)[1] + " file")
-    return {"v_ok": v_ok, "a_ok": a_ok, "dur": dur, "why": ", ".join(why)}
+    only_shrink = not why
+    if big: why.append(f"shrinking ({v['_kbps'] / 1000:.1f} Mbps)")
+    return {"v_ok": v_ok and not big, "a_ok": a_ok, "dur": dur, "why": ", ".join(why), "shrink": big, "only_shrink": only_shrink}
 
 
 VF_PAD = ("scale=trunc(iw*sar/2)*2:ih,setsar=1,"
@@ -273,7 +288,7 @@ def pending(files):
     for f in files:
         try:
             s = sig(f)
-            if S.checked.get(f) == s or S.failed.get(f) == s or f in S.skipped or time.time() - os.path.getmtime(f) < SETTLE_SECONDS:
+            if (S.checked.get(f) == s and (not S.shrink or S.shrunk.get(f) == s)) or S.failed.get(f) == s or f in S.skipped or time.time() - os.path.getmtime(f) < SETTLE_SECONDS:
                 continue
         except FileNotFoundError:
             continue
@@ -283,8 +298,14 @@ def pending(files):
 
 def order(todo, hot):
     def rank(f):
+        try:
+            shrink_only = S.checked.get(f) == sig(f)
+        except OSError:
+            shrink_only = False
         if f in S.pinned:
             return (-1, S.pinned.index(f), 0, f)
+        if shrink_only:  # already plays fine, only too big: after all real conversions (never mid-watch)
+            return (4, 0, 0, f)
         if f in hot:
             return (0, hot.index(f), f)
         best = None  # the episodes right after a hot one in the same folder, closest first
@@ -316,10 +337,10 @@ def convert(f, p, urgent, hw=None):
     if p["v_ok"]:
         vargs, pre = ["-c:v", "copy"], []
     elif hw:   # decode + bars in software, compress on the Intel GPU
-        vargs = ["-vf", vf + ",format=nv12,hwupload", "-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", str(OPT["quality"] + 2)]
+        vargs = ["-vf", vf + ",format=nv12,hwupload", "-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", str(OPT["quality"] + (6 if p.get("shrink") else 2))]
         pre = ["-vaapi_device", "/dev/dri/renderD128"]
     else:
-        vargs, pre = ["-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", str(OPT["quality"]), "-threads", threads], []
+        vargs, pre = ["-vf", vf, "-c:v", "libx264", "-preset", "veryfast", "-crf", str(OPT["quality"] + (4 if p.get("shrink") else 0)), "-threads", threads], []
     aargs = ["-c:a", "copy"] if p["a_ok"] else ["-c:a", "aac", "-b:a", "160k"]
     sargs = ["-sn"] if is_mp4 else ["-map", "0:s?", "-c:s", "copy"]
     cmd = ["nice", "-n", "5" if urgent else "19", "ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y", *pre,
@@ -366,6 +387,12 @@ def convert(f, p, urgent, hw=None):
         log(f"FAILED {pretty(f)}: {err.strip()[-200:]}")
         S.save()
         return False
+    if p.get("only_shrink") and os.path.getsize(tmp) > 0.85 * before:
+        os.remove(tmp)
+        S.checked[f] = S.shrunk[f] = sig(f)
+        log(f"{pretty(f)} is already about as small as it gets - kept the original")
+        S.save()
+        return False
     if OPT.get("backup_folder"):
         bak = os.path.join(OPT["backup_folder"], rel(f))
         os.makedirs(os.path.dirname(bak), exist_ok=True)
@@ -375,10 +402,10 @@ def convert(f, p, urgent, hw=None):
     if out != f:
         os.remove(f)
     after = os.path.getsize(out)
-    S.checked[out] = sig(out)
+    S.checked[out] = S.shrunk[out] = sig(out)
     S.history.append({"file": out, "result": "converted", "at": time.time(), "why": p["why"],
                       "seconds": round(time.time() - started), "before": before, "after": after})
-    log(f"Converted {pretty(out)} ({p['why']}) in {round((time.time() - started) / 60)} min")
+    log(f"Converted {pretty(out)} ({p['why']}, {before / 1e9:.1f} → {after / 1e9:.1f} GB) in {round((time.time() - started) / 60)} min")
     ha_event("tv_ready_converted", {"path": out, "original_path": f, "name": pretty(out), "renamed": out != f, "urgent": urgent})
     S.save()
     return out != f
@@ -447,7 +474,9 @@ def worker():
         except Exception as e:
             log(f"Couldn't read {rel(f)}: {e}"); S.failed[f] = sig(f); continue
         if p is None:
-            S.checked[f] = sig(f); S.save(); continue
+            S.checked[f] = sig(f)
+            if S.shrink: S.shrunk[f] = sig(f)
+            S.save(); continue
         if not snapshot_done:
             jf_snapshot(); snapshot_done = True
         with LOCK:
@@ -502,7 +531,7 @@ class Handler(BaseHTTPRequestHandler):
                 hist = [dict(h, name=pretty(h["file"]), file=rel(h["file"])) for h in S.history[-30:]][::-1]
                 conv = [h for h in S.history if h["result"] == "converted"]
                 body = {
-                    "status": "paused" if S.paused else S.status, "paused": S.paused, "run_now": S.run_now,
+                    "status": "paused" if S.paused else S.status, "paused": S.paused, "run_now": S.run_now, "shrink": S.shrink,
                     "off_peak": in_off_peak(), "window": [OPT["off_peak_start"], OPT["off_peak_end"]], "hw": bool(HW),
                     "current": cur, "queue": [{"name": pretty(f), "file": rel(f), "pinned": f in S.pinned} for f in S.queue], "queue_total": S.queue_total,
                     "history": hist, "log": LOG[-80:][::-1], "jellyfin": jf_enabled(),
@@ -541,6 +570,10 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     S.pinned.append(full); log(f"Pinned {pretty(full)} - converts next")
                 S.save()
+        elif path == "/api/shrink":
+            S.shrink = not S.shrink; S.save()
+            log("Shrink collection ON - after everything is TV-ready, oversized files get re-compressed (originals kept if it saves under 15%)"
+                if S.shrink else "Shrink collection off")
         elif path == "/api/retry_failed":
             S.failed.clear(); S.skipped.clear(); S.save(); log("Retrying failed and skipped files")
         else:
